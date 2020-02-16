@@ -1,10 +1,16 @@
-#include "SDL.h"
-#include "fftw3.h"
-#include "ConstantQ.h"
-#include <iostream>
-#include <cmath>
-#include <algorithm>
-#include <chrono>
+/* AUDIO VISUALISER
+
+This program uses a feature of most older Windows computers called Stereo Mix, which records all the audio
+output from the computer and allows it to be read in by a program in real time. My program turns this into
+a visual display of which frequencies are being played - like a reverse piano. The eventual goal is to 
+send the output to an Arduino board connected to a LED array, to create a physical audio visualiser.
+*/
+
+#include "SDL.h" //for the graphical output 
+#include "fftw3.h" //for time-to-frequency conversion
+#include <iostream> //for logging output (during testing)
+#include <cmath> //for pi
+#include <chrono> //for measuring execution time (during testing)
 
 using namespace std::chrono;
 
@@ -12,7 +18,6 @@ const int SAMPLES_PER_FRAME = 2048;
 const int SCREEN_WIDTH = 1200;
 const int SCREEN_HEIGHT = 720;
 const int numx = 120;
-const int numy = 1;
 double speed = 5.0;
 
 const int MAX_RECORDING_SECONDS = 1000;
@@ -21,99 +26,41 @@ const int RECORDING_BUFFER_SECONDS = MAX_RECORDING_SECONDS + 1;
 SDL_Window* gWindow = NULL;
 SDL_Surface* gScreenSurface = NULL;
 
-double RGBValues[numx][numy][3];
-SDL_Rect PixelArray[numx][numy];
+double RGBValues[numx][3];
+SDL_Rect PixelArray[numx];
 
 Sint16* gRecordingBuffer = NULL;
 Uint32 gBufferBytePosition = 0;
 
-int width, height;
-
-float note_frequencies[120];
-
-void init_frequencies()
-{
-    for (int i = 0; i < 120; i++)
-    {
-        note_frequencies[i] = 32.70319566f * pow(2, i/12.0f);
-    }
-}
-float result[120];
-bool test = false;
-void note_transform(Sint16* samples, float* result)
-{
-    float sin_sum;
-    float cos_sum;
-    for (int i = 0; i < 120; i++)
-    {
-        result[i] = 0;
-        sin_sum = 0;
-        cos_sum = 0;
-        for (int j = 0; j < SAMPLES_PER_FRAME; j++)
-        {
-            sin_sum += samples[j] * sin(2.0f*M_PI*note_frequencies[i]*j/44100.0f);
-            cos_sum += samples[j] * cos(2.0f*M_PI*note_frequencies[i]*j/44100.0f);
-        }
-        result[i] = sqrt(pow(sin_sum, 2) + pow(cos_sum, 2));
-    }
-}
 
 void fftw_callback( void* userdata, Uint8* stream, int bytes )
 {
-    Sint16* real_stream = (Sint16*)stream;
+    //This is the 'callback' function, which executes every time the stream has SAMPLES_PER_FRAME
+	//new audio samples to parse. Data is converted into the right 16-bit format, passed through a
+	//fast Fourier transform to convert to the frequency domain, and then plotted on the screen.
+
+
+    Sint16* real_stream = (Sint16*)stream; //Convert into correct format
     int length = bytes/2;
 
-    double in_stream[length];
-
+    double in_stream[length]; //The fast fourier transform
     fftw_complex* f_transform = (fftw_complex*) fftw_malloc(sizeof(fftw_complex) * (length/2 + 1));
     fftw_plan p = fftw_plan_dft_r2c_1d(length, in_stream, f_transform, FFTW_ESTIMATE);
-
     std::copy(real_stream, real_stream+length, in_stream);
     fftw_execute(p);
 
-    for (int i = 0; i < numx; ++i)
-        {
-            for (int j = 0; j < numy; ++j)
-            {
-                for (int k = 0; k < 3; ++k)
-                {
-                    RGBValues[i][j][0] = std::min((int)(pow(pow(f_transform[i][0], 2) + pow(f_transform[i][1], 2), 0.5)/5000), 255);
-                }
-                SDL_FillRect( gScreenSurface, &PixelArray[i][j], SDL_MapRGB( gScreenSurface->format, RGBValues[i][j][0], RGBValues[i][j][1], RGBValues[i][j][2] ) );
-            }
-        }
-    SDL_UpdateWindowSurface( gWindow );
-}
-
-void audioRecordingCallback( void* userdata, Uint8* stream, int bytes )
-{
-    Sint16* real_stream = (Sint16*)stream;
-    int length = bytes/2;
-
-    float* transformed_output = (float*) malloc(sizeof(float) * 120);
-
-    high_resolution_clock::time_point t1 = high_resolution_clock::now();
-    note_transform(real_stream, transformed_output);
-
-    high_resolution_clock::time_point t2 = high_resolution_clock::now();
-    duration<double> time_span = duration_cast<duration<double>>(t2 - t1);
-    std::cout << time_span.count() << ", ";
-    for (int i = 0; i < numx; ++i)
+    for (int i = 0; i < numx; ++i) //Update the screen data with the magnitude of the transform at each frequency bin.
     {
-        for (int j = 0; j < numy; ++j)
-        {
-            for (int k = 0; k < 3; ++k)
-            {
-                RGBValues[i][j][0] = std::min(255.0f, transformed_output[i]/20000);
-            }
-            SDL_FillRect( gScreenSurface, &PixelArray[i][j], SDL_MapRGB( gScreenSurface->format, RGBValues[i][j][0], RGBValues[i][j][1], RGBValues[i][j][2] ) );
-        }
+	//Right now the screen just goes red at the high amplitude frequencies - this is the base for more complex algorithms in future.
+        RGBValues[i][0] = std::min((int)(pow(pow(f_transform[i][0], 2) + pow(f_transform[i][1], 2), 0.5)/5000), 255);
+        SDL_FillRect( gScreenSurface, &PixelArray[i], SDL_MapRGB( gScreenSurface->format, RGBValues[i][0], RGBValues[i][1], RGBValues[i][2] ) );
     }
-    SDL_UpdateWindowSurface( gWindow );
+    SDL_UpdateWindowSurface( gWindow ); //Refresh the screen
 }
 
 void init()
 {
+    //Initialise SDL2
     SDL_Init(SDL_INIT_AUDIO | SDL_INIT_VIDEO);
 
     //Initialise note frequencies
@@ -122,24 +69,21 @@ void init()
     //Initialise colour arrays
     for (int i = 0; i < numx; ++i)
     {
-        for (int j = 0; j < numy; ++j)
+        for (int j = 0; j < 3; ++j)
         {
-            for (int k = 0; k < 3; ++k)
-            {
-                RGBValues[i][j][k] = 0;
-            }
-            PixelArray[i][j].x = SCREEN_WIDTH * i/numx;
-            PixelArray[i][j].y = SCREEN_HEIGHT * j/numy;
-            PixelArray[i][j].h = SCREEN_HEIGHT / numy;
-            PixelArray[i][j].w = SCREEN_WIDTH / numx;
+            RGBValues[i][k] = 0;
         }
+        PixelArray[i].x = SCREEN_WIDTH * i/numx;
+        PixelArray[i].y = 0;
+        PixelArray[i].h = SCREEN_HEIGHT;
+        PixelArray[i].w = SCREEN_WIDTH / numx;
     }
 
     //Initialise window
-    gWindow = SDL_CreateWindow( "Bolg!", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN );
+    gWindow = SDL_CreateWindow( "Sound Visualiser", SDL_WINDOWPOS_UNDEFINED, SDL_WINDOWPOS_UNDEFINED, SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_SHOWN );
     gScreenSurface = SDL_GetWindowSurface( gWindow );
 
-    //Initialise audio
+    //Initialise connection to Stereo Mix, and sets up my 'fftw_callback' function to receive data from it.
 
     SDL_AudioSpec desiredRecordingSpec;
     SDL_zero(desiredRecordingSpec);
@@ -161,11 +105,12 @@ void init()
     memset( gRecordingBuffer, 0, gBufferByteSize );
 
     gBufferBytePosition = 0;
-    SDL_PauseAudioDevice(dev, 0);
+    SDL_PauseAudioDevice(dev, 0); //Using this function with argument 0 means 'play'.
 }
 
 void close()
 {
+    //Closes audio & window properly.
     SDL_CloseAudioDevice(2);
     SDL_DestroyWindow( gWindow );
     gWindow = NULL;
@@ -174,9 +119,9 @@ void close()
 
 int main( int argc, char* args[] )
 {
-    init();
+    //	Main event loop thread - initialises program, waits for the user to quit, and exits. 
 
-    //Main event loop
+    init();
     bool quit = false;
     SDL_Event e;
 
