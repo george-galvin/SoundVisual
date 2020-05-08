@@ -1,3 +1,7 @@
+/* Test for the LED/arduino side. Makes a pretty rainbow pattern
+* without needing to play sound!
+*/
+
 #include <FastLED.h>
 #define NUM_LEDS 50
 #define DATA_PIN 9
@@ -7,7 +11,7 @@ CRGB leds[NUM_LEDS];
 
 void setup() {
    FastLED.addLeds<WS2801, DATA_PIN, CLOCK_PIN, RGB>(leds, NUM_LEDS);
-   for (int i = 0; i < NUM_LEDS; i++)
+   for (int i = 0; i < NUM_LEDS; i++) //set up LED array as all red
    {
      leds[i].setHue(0);
    }
